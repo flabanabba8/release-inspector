@@ -12,6 +12,13 @@ dashboard=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dashboard)
 
 class DashboardTests(unittest.TestCase):
+    def test_binary_operation_is_forwarded(self):
+        app=FastAPI();app.include_router(dashboard.router);client=TestClient(app)
+        with patch.object(dashboard.package, 'invoke', return_value='{"strings_skipped":0}') as invoke:
+            response=client.post('/action',json={'operation':'release_inspect_binary','arguments':{'artifact_path':'/tmp/fixture.bin'}})
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(invoke.call_args.args[0], 'release_inspect_binary')
+
     def test_profile_opt_in_and_sensitive_filename_redaction(self):
         with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
             profile=Path(tmp)/'custom-profile'

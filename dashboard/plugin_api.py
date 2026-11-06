@@ -13,7 +13,7 @@ package = importlib.util.module_from_spec(spec)
 sys.modules[name] = package
 spec.loader.exec_module(package)
 router = APIRouter()
-OPERATIONS = {'release_inspect_tree', 'release_inspect_git', 'release_inspect_archive'}
+OPERATIONS = {'release_inspect_tree', 'release_inspect_git', 'release_inspect_archive', 'release_inspect_binary'}
 
 @router.post('/action')
 def action(body: dict):

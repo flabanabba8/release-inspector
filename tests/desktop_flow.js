@@ -10,6 +10,8 @@ export async function run(assert, document) {
       secret_indicators:[{file_id:1,path:null,line:2,type:'Potential secret'}], configuration_indicators:[], omissions:[{file_id:2,path:'binary.dat',reason:'binary requires review'}] }
     if (body.operation === 'release_inspect_archive') return { notice:'Archive coverage is limited', unsafe_name_indexes:[[0]],
       secret_indicators:[{member:[1,2],component:'content',line:1,type:'Potential secret'}], configuration_indicators:[], omissions:[] }
+    if (body.operation === 'release_inspect_binary') return { notice:'Binary coverage is limited', strings_skipped:2,
+      secret_indicators:[{byte_offset:42,encoding:'utf-16le',type:'Potential secret'}], configuration_indicators:[], scanner_omissions:[] }
     throw Error('Unexpected operation')
   } }
   plugin.register(ctx)
@@ -35,6 +37,12 @@ export async function run(assert, document) {
     await submit()
     assert.match(document.querySelector('[aria-label="Inspection report"]').textContent, /Archive member 1.2/)
     assert.match(document.querySelector('[role=alert]').textContent, /unsafe archive/)
+    await change(document.querySelector('select'), 'binary')
+    await change(document.querySelector('input:not([type=checkbox])'), '/tmp/fixture.bin')
+    await submit()
+    assert.equal(calls[2].arguments.artifact_path, '/tmp/fixture.bin')
+    assert.match(document.querySelector('[aria-label="Inspection report"]').textContent, /Byte offset 42 \(utf-16le\)/)
+    assert.match(document.querySelector('[role=alert]').textContent, /2 binary string/)
   } finally { await act(async () => root.unmount()) }
-  return {passed:true, checks:['manual inspection', 'profile data opt-in', 'hidden sensitive path', 'changed source warning', 'archive omissions', 'timer cleanup']}
+  return {passed:true, checks:['manual inspection', 'profile data opt-in', 'hidden sensitive path', 'changed source warning', 'archive omissions', 'binary findings and skips', 'timer cleanup']}
 }

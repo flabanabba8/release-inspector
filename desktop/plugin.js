@@ -7,6 +7,7 @@ const button = (text, onClick, disabled = false, props = {}) => h('button', { st
 const label = (text, input) => h('label', null, text, input)
 
 function location(item) {
+  if (item.byte_offset != null) return `Byte offset ${item.byte_offset} (${item.encoding || 'unknown encoding'})`
   if (item.path) return item.path
   if (item.object_id) return `Git object ${item.object_id}`
   if (Array.isArray(item.member)) return `Archive member ${item.member.join('.')}`
@@ -25,8 +26,8 @@ function Inspector({ ctx }) {
   const call = (operation, args) => ctx.rest('/action', { method: 'POST', body: { operation, arguments: args }, timeoutMs: 65000 })
   const scan = () => {
     setBusy(true); setError(''); setReport(null)
-    const operation = mode === 'git' ? 'release_inspect_git' : mode === 'archive' ? 'release_inspect_archive' : 'release_inspect_tree'
-    const key = mode === 'git' ? 'repo_path' : mode === 'archive' ? 'archive_path' : 'source_dir'
+    const operation = mode === 'git' ? 'release_inspect_git' : mode === 'archive' ? 'release_inspect_archive' : mode === 'binary' ? 'release_inspect_binary' : 'release_inspect_tree'
+    const key = mode === 'git' ? 'repo_path' : mode === 'archive' ? 'archive_path' : mode === 'binary' ? 'artifact_path' : 'source_dir'
     call(operation, { [key]: path.trim(), allow_profile_data: allowProfile }).then(setReport).catch(e => setError(String(e.message || e))).finally(() => setBusy(false))
   }
   return h('main', { style: { maxWidth: 1000, padding: 28, margin: 'auto', display: 'grid', gap: 20, color: 'var(--ui-text-primary)' } },
@@ -35,7 +36,7 @@ function Inspector({ ctx }) {
     error && h('p', { role: 'alert', style: card }, error),
     h('form', { style: card, onSubmit: e => { e.preventDefault(); scan() } },
       label('Inspection type', h('select', { style: { ...field, display: 'block' }, value: mode, disabled: busy, onChange: e => { setMode(e.target.value); setReport(null) } },
-        h('option', { value:'tree' }, 'Current source tree'), h('option', { value:'git' }, 'Local Git history and refs'), h('option', { value:'archive' }, 'ZIP or APK'))),
+        h('option', { value:'tree' }, 'Current source tree'), h('option', { value:'git' }, 'Local Git history and refs'), h('option', { value:'archive' }, 'ZIP or APK'), h('option', { value:'binary' }, 'Binary literal strings'))),
       label('Path on the Hermes host', h('input', { style: { ...field, display: 'block', width: '100%' }, value: path, disabled: busy, onChange: e => { setPath(e.target.value); setReport(null) } })),
       label('Allow selected artifacts inside this profile’s plugin data', h('input', { type:'checkbox', checked:allowProfile, disabled:busy, onChange:e => { setAllowProfile(e.target.checked); setReport(null) } })),
       button(busy ? 'Inspecting…' : 'Inspect selected scope', undefined, busy || !path.trim(), { type:'submit' }),
@@ -43,10 +44,11 @@ function Inspector({ ctx }) {
     report && h('div', { style: { display:'grid', gap:14 }, 'aria-label':'Inspection report' },
       h('div', { style:card, role:'status' }, h('strong', null, 'Inspection complete'), h('p', null, report.coverage || report.notice),
         (report.refs_changed_during_scan || report.changed_directories_after_snapshot > 0) && h('p', { role:'alert' }, 'The source changed during inspection. Review changes and inspect again.'),
+        report.strings_skipped > 0 && h('p', { role:'alert' }, `${report.strings_skipped} binary string(s) were skipped and require separate review.`),
         report.unsafe_name_indexes?.length > 0 && h('p', { role:'alert' }, `${report.unsafe_name_indexes.length} unsafe archive member name(s) require review.`)),
       h(Findings, { title:'Secret indicators', items:report.secret_indicators || [], describe:item => item.type || 'Potential secret' }),
       h(Findings, { title:'Configuration indicators', items:report.configuration_indicators || [], describe:item => (item.categories || []).join(', ') }),
-      h(Findings, { title:'Omissions', items:report.omissions || [], describe:item => item.reason || 'Separate review required' })))
+      h(Findings, { title:'Omissions', items:report.omissions || report.scanner_omissions || [], describe:item => item.reason || 'Separate review required' })))
 }
 
 export default { id:'release-inspector', name:'Release Inspector', register(ctx) {
