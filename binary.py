@@ -29,6 +29,21 @@ def inspect_binary(artifact_path, allow_profile_data=False, *, _profile_data=Non
     current = path.lstat()
     if len(raw) > MAX_BINARY or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) or not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
         raise ValueError('Binary changed or was replaced during inspection')
+    fingerprint = hashlib.sha256(raw).hexdigest()
+    def verify_unchanged():
+        check_fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+        with os.fdopen(check_fd, 'rb') as stream:
+            state = os.fstat(stream.fileno())
+            if not stat.S_ISREG(state.st_mode) or (state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+                raise ValueError('Binary changed during inspection')
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                if time.monotonic() >= deadline: raise RuntimeError('Binary inspection time limit exceeded')
+                digest.update(chunk)
+            end = os.fstat(stream.fileno())
+        current = path.lstat()
+        if digest.hexdigest() != fingerprint or (end.st_dev, end.st_ino, end.st_size, end.st_mtime_ns) != (state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns) or not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (end.st_dev, end.st_ino):
+            raise ValueError('Binary changed or was replaced during inspection')
     entries, total, skipped = [], 0, 0
     for pattern, encoding in ((ASCII, 'ascii'), (UTF16LE, 'utf-16le')):
         for match in pattern.finditer(raw):
@@ -41,19 +56,21 @@ def inspect_binary(artifact_path, allow_profile_data=False, *, _profile_data=Non
             entries.append((match.start(), encoding, value)); total += size
     entries.sort(key=lambda item: item[0])
     if not entries:
-        return {'sha256': hashlib.sha256(raw).hexdigest(), 'strings_submitted': 0, 'strings_skipped': skipped,
+        verify_unchanged()
+        return {'sha256': fingerprint, 'strings_submitted': 0, 'strings_skipped': skipped,
                 'secret_indicators': [], 'configuration_indicators': [], 'notice': NOTICE}
     with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
         staged = Path(tmp)/'strings.txt'
         staged.write_text('\n'.join(value for _, _, value in entries) + '\n', encoding='utf-8')
         result = _inspect_tree(tmp, expose_generated_names=True, deadline=deadline)
+    verify_unchanged()
     def public(item):
         line = item.get('line')
         if type(line) is not int or not 1 <= line <= len(entries):
             raise RuntimeError('Unexpected scanner result; inspection incomplete')
         offset, encoding, _ = entries[line-1]
         return {'byte_offset': offset, 'encoding': encoding, **{k: v for k, v in item.items() if k not in ('path', 'file_id', 'component', 'line')}}
-    return {'sha256': hashlib.sha256(raw).hexdigest(), 'strings_submitted': len(entries), 'strings_skipped': skipped,
+    return {'sha256': fingerprint, 'strings_submitted': len(entries), 'strings_skipped': skipped,
             'secret_indicators': [public(x) for x in result['secret_indicators']],
             'configuration_indicators': [public(x) for x in result['configuration_indicators']],
             'scanner_omissions': result['omissions'], 'notice': NOTICE}

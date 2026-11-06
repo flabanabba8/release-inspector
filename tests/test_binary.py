@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 root = Path(__file__).parents[1]
 spec = importlib.util.spec_from_file_location('inspector_binary_fixture', root/'__init__.py', submodule_search_locations=[str(root)])
@@ -32,6 +33,19 @@ class BinaryTests(unittest.TestCase):
             result = module.inspect_binary(str(path))
             self.assertEqual(result['strings_submitted'], 0)
             self.assertGreater(result['strings_skipped'], 0)
+
+    def test_change_during_scanning_is_rejected(self):
+        with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
+            path = Path(tmp)/'fixture.bin'
+            path.write_bytes(b'\x00ordinary source text\x00')
+            scan = module.binary._inspect_tree
+            def mutate(*args, **kwargs):
+                result = scan(*args, **kwargs)
+                path.write_bytes(b'\x00changed source text\x00')
+                return result
+            with patch.object(module.binary, '_inspect_tree', side_effect=mutate):
+                with self.assertRaisesRegex(ValueError, 'changed'):
+                    module.inspect_binary(str(path))
 
 
 if __name__ == '__main__': unittest.main()
