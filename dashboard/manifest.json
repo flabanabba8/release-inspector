@@ -1,0 +1,7 @@
+{
+  "name": "release-inspector",
+  "label": "Release Inspector",
+  "version": "0.1.0",
+  "description": "Review bounded source, Git and archive audit findings.",
+  "api": "plugin_api.py"
+}
