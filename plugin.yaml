@@ -10,3 +10,4 @@ provides_tools:
   - release_inspect_tree
   - release_inspect_git
   - release_inspect_archive
+  - release_inspect_binary
