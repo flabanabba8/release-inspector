@@ -67,6 +67,48 @@ def tree_names(raw, digest_bytes):
     return ('\n'.join(names) + ('\n' if names else '')).encode(), omitted, gitlinks
 
 
+def tree_edges(raw, digest_bytes):
+    edges, position = [], 0
+    while position < len(raw):
+        separator = raw.find(b' ', position)
+        end = raw.find(b'\0', separator + 1) if separator >= 0 else -1
+        if separator < 0 or end < 0 or end + 1 + digest_bytes > len(raw):
+            raise RuntimeError('Malformed Git tree object')
+        mode, name = raw[position:separator], raw[separator + 1:end]
+        if not mode or not name or b'/' in name:
+            raise RuntimeError('Malformed Git tree entry')
+        edges.append((mode, name, raw[end + 1:end + 1 + digest_bytes].hex()))
+        position = end + 1 + digest_bytes
+    return edges
+
+
+def full_tree_paths(trees):
+    # Enumerate from every reachable tree: this includes direct tree refs and
+    # shared subtrees, while bounding repeated paths and malicious deep graphs.
+    paths, incomplete, total = set(), False, 0
+    for root in trees:
+        stack = [(root, b'', frozenset())]
+        while stack:
+            tree, prefix, ancestors = stack.pop()
+            if tree in ancestors or len(ancestors) >= 100 or tree not in trees:
+                incomplete = True
+                continue
+            for mode, name, child in trees[tree]:
+                path = prefix + name
+                try: text = path.decode('utf-8')
+                except UnicodeDecodeError:
+                    incomplete = True
+                    continue
+                if text not in paths:
+                    paths.add(text)
+                    total += len(path)
+                if len(paths) > 10000 or total > 4_000_000:
+                    return b'', True
+                if mode in (b'40000', b'040000'):
+                    stack.append((child, path + b'/', ancestors | {tree}))
+    return (''.join('git_path = ' + json.dumps(path, ensure_ascii=False) + '\n' for path in sorted(paths))).encode(), incomplete
+
+
 def inspect_git(repo_path, allow_profile_data=False, *, _profile_data=None):
     repo = resolve_source(repo_path, _profile_data, allow_profile_data, directory=True)
     deadline = time.monotonic() + 55
@@ -102,6 +144,7 @@ def inspect_git(repo_path, allow_profile_data=False, *, _profile_data=None):
     with tempfile.TemporaryDirectory(dir='/tmp') as temp:
         root = Path(temp)
         names = []
+        trees = {}
         for index, line in enumerate(refs):
             _, separator, name = line.partition(b'\t')
             if not separator: raise RuntimeError('Git returned invalid reference metadata')
@@ -119,6 +162,7 @@ def inspect_git(repo_path, allow_profile_data=False, *, _profile_data=None):
             if len(raw) != size: raise RuntimeError('Git object size changed during inspection')
             total += size
             if kind == 'tree':
+                trees[identifier] = tree_edges(raw, digest_bytes)
                 raw, missing, gitlinks = tree_names(raw, digest_bytes)
                 if missing:
                     omissions.append({'object_id': identifier, 'type': kind, 'reason': 'non-UTF-8 tree names require separate inspection', 'count': missing})
@@ -137,15 +181,21 @@ def inspect_git(repo_path, allow_profile_data=False, *, _profile_data=None):
                 continue
             (root / (identifier + '.txt')).write_bytes(raw)
             types[identifier] = kind
+        paths, incomplete = full_tree_paths(trees)
+        if incomplete:
+            omissions.append({'type': 'full_paths', 'reason': 'full path enumeration incomplete or exceeded bounds'})
+        if paths:
+            (root/'fullpaths.txt').write_bytes(paths)
+            types['fullpaths'] = 'full_paths'
         if not types: raise ValueError('No supported text objects to scan')
         scan = _inspect_tree(str(root), expose_generated_names=True, deadline=deadline)
     refs_changed = refs != run(['for-each-ref', '--format=%(objectname)%09%(refname)']).splitlines() or head != run(['rev-parse', 'HEAD']).strip()
     def transform(item):
         stem = Path(item['path']).stem
-        return {'object_id': None if types[stem] == 'ref_names' else stem, 'object_type': types[stem],
+        return {'object_id': None if types[stem] in ('ref_names', 'full_paths') else stem, 'object_type': types[stem],
                 **{k: v for k, v in item.items() if k not in ('path', 'file_id', 'component')}}
     return {'refs_count': len(refs), 'refs_changed_during_scan': refs_changed, 'reachable_objects': len(object_ids), 'text_components_submitted': len(types),
             'secret_indicators': [transform(x) for x in scan['secret_indicators']],
             'configuration_indicators': [transform(x) for x in scan['configuration_indicators']], 'omissions': omissions + scan['omissions'],
-            'coverage': 'Reachable text blobs, commits, tags, UTF-8 tree entry names and local ref names enumerated by git rev-list --all HEAD, subject to explicit omissions and scanner filters.',
-            'notice': 'This is not a full audit: reconstructed full paths, binary/archive contents, screenshots, remote refs and release assets require separate inspection. No findings do not establish safety.'}
+            'coverage': 'Reachable text blobs, commits, tags, UTF-8 tree entry names, reconstructed relative paths and local ref names enumerated by git rev-list --all HEAD, subject to explicit omissions and scanner filters.',
+            'notice': 'This is not a full audit: Binary/archive contents, screenshots, remote refs and release assets require separate inspection. No findings do not establish safety.'}

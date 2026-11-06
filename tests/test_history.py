@@ -44,6 +44,7 @@ class GitTests(unittest.TestCase):
             self.assertTrue(result['secret_indicators'])
             self.assertTrue(any(x['object_type'] == 'tag' for x in result['secret_indicators']))
             self.assertTrue(any(x['object_type'] == 'tree_names' for x in result['secret_indicators']))
+            self.assertTrue(any(x['object_type'] == 'full_paths' for x in result['secret_indicators']))
             self.assertTrue(any(x['object_type'] == 'ref_names' for x in result['secret_indicators']))
             self.assertFalse(result['refs_changed_during_scan'])
             self.assertTrue(any(x['object_id'] == blob_id for x in result['secret_indicators']))
@@ -85,5 +86,21 @@ class GitTests(unittest.TestCase):
             reasons = [x['reason'] for x in module.inspect_git(str(repo))['omissions']]
             self.assertIn('Git LFS payload requires separate inspection', reasons)
             self.assertIn('submodule histories require separate inspection', reasons)
+
+    def test_reconstructed_paths_include_nested_and_tree_refs(self):
+        trees = {'root': [(b'40000', b'folder', 'nested')],
+                 'nested': [(b'100644', b'file.txt', 'blob')]}
+        paths, incomplete = module.history.full_tree_paths(trees)
+        self.assertFalse(incomplete)
+        self.assertIn(b'folder/file.txt', paths)
+        self.assertIn(b'file.txt', paths)
+        paths, incomplete = module.history.full_tree_paths({'a': [(b'40000', b'loop', 'a')]})
+        self.assertTrue(incomplete)
+
+    def test_full_path_count_limit_reports_omission(self):
+        entries = [(b'100644', ('entry-%d' % i).encode(), 'blob') for i in range(10001)]
+        paths, incomplete = module.history.full_tree_paths({'root': entries})
+        self.assertTrue(incomplete)
+        self.assertEqual(paths, b'')
 
 if __name__ == '__main__': unittest.main()
