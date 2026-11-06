@@ -85,11 +85,14 @@ def tree_edges(raw, digest_bytes):
 def full_tree_paths(trees):
     # Enumerate from every reachable tree: this includes direct tree refs and
     # shared subtrees, while bounding repeated paths and malicious deep graphs.
-    paths, incomplete, total = set(), False, 0
+    paths, incomplete, total, visits = set(), False, 0, 0
     for root in trees:
         stack = [(root, b'', frozenset())]
         while stack:
             tree, prefix, ancestors = stack.pop()
+            visits += 1
+            if visits > 100000:
+                return b'', True
             if tree in ancestors or len(ancestors) >= 100 or tree not in trees:
                 incomplete = True
                 continue
