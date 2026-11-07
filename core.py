@@ -74,14 +74,14 @@ def scan_batch(files, cwd, max_output=16 * 1024**2, timeout=60):
 def resolve_source(value, profile_data=None, allow_profile_data=False, directory=False):
     if type(allow_profile_data) is not bool: raise ValueError('allow_profile_data must be boolean')
     original = Path(value).expanduser()
-    if original.is_symlink() or any(x in PRIVATE - {'.hermes'} for x in original.parts):
+    if original.is_symlink() or any(x.casefold() in PRIVATE - {'.hermes'} for x in original.parts):
         raise ValueError('Private paths and symlink roots are unsupported')
     resolved = original.resolve(strict=True)
     data = Path(profile_data).resolve() if profile_data is not None else None
-    home = data.parent if data is not None and data.name == 'plugin-data' else None
+    home = data.parent if data is not None and data.name.casefold() == 'plugin-data' else None
     allowed = allow_profile_data and home is not None and resolved.is_relative_to(data)
-    protected = '.hermes' in original.parts or '.hermes' in resolved.parts or (home is not None and resolved.is_relative_to(home))
-    if any(x in PRIVATE - {'.hermes'} for x in resolved.parts) or protected and not allowed:
+    protected = any(x.casefold() == '.hermes' for x in original.parts) or any(x.casefold() == '.hermes' for x in resolved.parts) or (home is not None and resolved.is_relative_to(home))
+    if any(x.casefold() in PRIVATE - {'.hermes'} for x in resolved.parts) or protected and not allowed:
         raise ValueError('Private profile configuration is unsupported; selected plugin data requires explicit opt-in')
     if directory:
         if not resolved.is_dir() or resolved == Path('/') or resolved == Path.home().resolve():
@@ -143,7 +143,7 @@ def _inspect_tree(source_dir, expose_generated_names=False, profile_data=None, a
             for name in list(dirs):
                 item = Path(directory)/name
                 index = add_entry(str(item.relative_to(p)))
-                if name == '.git' or name in PRIVATE or item.is_symlink():
+                if name.casefold() == '.git' or name.casefold() in PRIVATE or item.is_symlink():
                     omit(index, 'Git metadata, private configuration or symlink not inspected')
                     dirs.remove(name)
             for name in names:

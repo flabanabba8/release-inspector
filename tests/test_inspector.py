@@ -39,13 +39,15 @@ class InspectorTests(unittest.TestCase):
             root = Path(tmp)
             token = 'AKIA' + 'Z3XY7QWERTYUIOP2'
             (root / ('AWS_ACCESS_KEY_ID=' + token)).write_text('fixture')
-            private = root/'.codex'
+            private = root/'.CoDeX'
             private.mkdir()
             (private/'fixture.txt').write_text('not read')
+            (root/'.GiT').mkdir()
             result = core.inspect_tree(str(root))
             self.assertFalse(token in str(result))
             self.assertTrue(any(x['component'] == 'name' and x['path'] is None for x in result['secret_indicators']))
             self.assertTrue(any('private configuration' in x['reason'] for x in result['omissions']))
+            self.assertGreaterEqual(sum('Git metadata' in x['reason'] for x in result['omissions']), 2)
 
     def test_scanner_child_does_not_inherit_credentials(self):
         with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
