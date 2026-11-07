@@ -67,7 +67,7 @@ def resolve_source(value, profile_data=None, allow_profile_data=False, directory
     if any(x.casefold() in PRIVATE - {'.hermes'} for x in resolved.parts) or protected and not allowed:
         raise ValueError('Private profile configuration is unsupported; selected plugin data requires explicit opt-in')
     if directory:
-        if not resolved.is_dir() or resolved == Path('/') or resolved == Path.home().resolve():
+        if not resolved.is_dir() or resolved == Path(resolved.anchor) or resolved == Path.home().resolve():
             raise ValueError('Choose a specific source directory')
     elif not resolved.is_file():
         raise ValueError('Choose a regular file')

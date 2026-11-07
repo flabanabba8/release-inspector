@@ -14,6 +14,10 @@ plugin = importlib.util.module_from_spec(spec);sys.modules[spec.name]=plugin;spe
 core = plugin.core
 
 class InspectorTests(unittest.TestCase):
+    def test_filesystem_root_is_rejected(self):
+        with self.assertRaisesRegex(ValueError,'specific source directory'):
+            core.resolve_source(str(Path.cwd().anchor),directory=True)
+
     def test_crlf_finding_keeps_original_line_number(self):
         with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
             token='AKIA'+'Z3XY7QWERTYUIOP2'
