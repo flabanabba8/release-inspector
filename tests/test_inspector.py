@@ -109,6 +109,15 @@ class InspectorTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'timed out'):core.scan_batch([],tmp,timeout=.2)
         self.assertEqual(len(children),1);self.assertIsNotNone(children[0].poll())
 
+    def test_scanner_timeout_after_stdout_closes(self):
+        original = core.subprocess.Popen;children=[]
+        def slow(_command, **kwargs):
+            process=original([sys.executable,'-c','import os,time;os.close(1);time.sleep(30)'], **kwargs)
+            children.append(process);return process
+        with tempfile.TemporaryDirectory(dir='/tmp') as tmp, patch.object(core.subprocess,'Popen',side_effect=slow):
+            with self.assertRaisesRegex(RuntimeError,'timed out'):core.scan_batch([],tmp,timeout=.2)
+        self.assertEqual(len(children),1);self.assertIsNotNone(children[0].poll())
+
     def test_non_utf8_filename_is_hidden_and_reported(self):
         with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
             root = Path(tmp)
