@@ -3,7 +3,7 @@ import { createElement as h, useState } from 'react'
 
 const field = { padding: '8px 10px', border: '1px solid var(--ui-stroke-secondary)', borderRadius: 7, background: 'var(--ui-bg-tertiary)', color: 'var(--ui-text-primary)' }
 const card = { padding: 16, border: '1px solid var(--ui-stroke-secondary)', borderRadius: 12, display: 'grid', gap: 10 }
-const button = (text, onClick, disabled = false, props = {}) => h('button', { style: field, onClick, disabled, ...props }, text)
+const button = (text, onClick, disabled = false, props = {}) => h('button', { style: { ...field, opacity: disabled ? 0.5 : 1 }, onClick, disabled, ...props }, text)
 const label = (text, input) => h('label', null, text, input)
 
 function location(item) {
