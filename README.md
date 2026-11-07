@@ -17,3 +17,8 @@ the direct process. A controlled parent-and-child fixture passed, but cleanup
 after a parent has already exited, termination failures and Windows ACL behavior
 remain unverified. Source and archive findings still require manual review, and
 this does not replace the complete publication audit.
+
+
+## Known limitation: bare keys in binaries
+
+`release_inspect_binary` extracts printable strings and runs the secret scanner over them. A bare key with no surrounding keyword or assignment (for example a 32-character hex string compiled into a Go program) is not flagged, so a clean binary result does not show that a binary carries no embedded credential. Verify with an exact search for any credential you know about.
