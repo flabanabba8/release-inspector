@@ -11,7 +11,9 @@ The Desktop page offers each inspection mode, including binary-string triage. Fu
 Selected artifacts inside the active profile plugin-data directory require explicit `allow_profile_data`; unrelated profile configuration remains blocked. Temporary snapshots are created outside the inspected tree and are cleaned on normal completion. Tests cover private paths, sensitive filenames, changed sources, bounded scanner output, Git objects and nested ZIP/APK content.
 
 Synthetic tree, Git, ZIP and binary scans and bounded subprocess behavior were
-tested on Linux and native Windows. On Windows, timeout cleanup stops the direct
-scanner/Git process; descendant-process cleanup and Windows ACL behavior are not
-verified. Source and archive findings still require manual review, and this does
-not replace the complete publication audit.
+tested on Linux and native Windows. On Windows, timeout cleanup requests
+termination of the active scanner/Git process tree and falls back to stopping
+the direct process. A controlled parent-and-child fixture passed, but cleanup
+after a parent has already exited, termination failures and Windows ACL behavior
+remain unverified. Source and archive findings still require manual review, and
+this does not replace the complete publication audit.

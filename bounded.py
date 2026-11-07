@@ -36,7 +36,15 @@ def output(command, *, env, cwd=None, stdin=subprocess.DEVNULL, timeout, limit, 
     finally:
         if process.poll() is None:
             try:
-                if os.name == 'nt': process.kill()
+                if os.name == 'nt':
+                    system_root = env.get('SystemRoot') or env.get('SYSTEMROOT')
+                    if system_root:
+                        try:
+                            subprocess.run([os.path.join(system_root, 'System32', 'taskkill.exe'), '/PID', str(process.pid), '/T', '/F'],
+                                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
+                        except (OSError, subprocess.TimeoutExpired):
+                            pass
+                    if process.poll() is None: process.kill()
                 else: os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError: pass
             process.wait()
