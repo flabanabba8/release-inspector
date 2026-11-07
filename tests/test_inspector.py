@@ -8,11 +8,20 @@ from pathlib import Path
 import tempfile
 import unittest
 
-spec = importlib.util.spec_from_file_location('inspector_core', Path(__file__).parents[1] / 'core.py')
-core = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(core)
+root = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('inspector_core_fixture', root/'__init__.py', submodule_search_locations=[str(root)])
+plugin = importlib.util.module_from_spec(spec);sys.modules[spec.name]=plugin;spec.loader.exec_module(plugin)
+core = plugin.core
 
 class InspectorTests(unittest.TestCase):
+    def test_crlf_finding_keeps_original_line_number(self):
+        with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
+            token='AKIA'+'Z3XY7QWERTYUIOP2'
+            (Path(tmp)/'source.txt').write_bytes(('header\r\nAWS_ACCESS_KEY_ID = "'+token+'"\r\n').encode())
+            result=core.inspect_tree(tmp)
+            self.assertEqual(result['secret_indicators'][0]['line'],2)
+            self.assertFalse(token in str(result))
+
     def test_scanner_and_config_indicators_do_not_expose_value(self):
         with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
             root = Path(tmp)
@@ -86,6 +95,15 @@ class InspectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir='/tmp') as tmp, patch.object(core.subprocess, 'Popen', side_effect=noisy):
             with self.assertRaisesRegex(RuntimeError, 'exceeds limit'):
                 core.scan_batch([], tmp, max_output=1024)
+
+    def test_scanner_timeout_stops_its_process(self):
+        original = core.subprocess.Popen; children=[]
+        def slow(_command, **kwargs):
+            process=original([sys.executable,'-c','import time; time.sleep(30)'], **kwargs)
+            children.append(process);return process
+        with tempfile.TemporaryDirectory(dir='/tmp') as tmp, patch.object(core.subprocess,'Popen',side_effect=slow):
+            with self.assertRaisesRegex(RuntimeError,'timed out'):core.scan_batch([],tmp,timeout=.2)
+        self.assertEqual(len(children),1);self.assertIsNotNone(children[0].poll())
 
     def test_non_utf8_filename_is_hidden_and_reported(self):
         with tempfile.TemporaryDirectory(dir='/tmp') as tmp:

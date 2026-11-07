@@ -5,13 +5,12 @@ import json
 import os
 from pathlib import Path
 import re
-import selectors
-import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+from .bounded import output as bounded_output
 
 PRIVATE = {'.ssh', '.gnupg', '.aws', '.azure', '.codex', '.docker', '.kube', '.pki', '.config', '.hermes'}
 CONFIG = re.compile(r'(?i)\b(?:private[_-]?key|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|pairing[_-]?secret|broker[_-]?(?:url|pin)|project[_-]?id|device[_-]?id)\b')
@@ -21,6 +20,11 @@ PRIVATE_HOST = re.compile(r'(?i)\b(?:[a-z0-9][a-z0-9-]*\.)+(?:local|lan|internal
 MAX_FILE = 8 * 1024**2
 MAX_TOTAL = 128 * 1024**2
 MAX_FILES = 10000
+
+
+def link_or_reparse(path):
+    info = Path(path).lstat()
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0))
 
 
 def categories(line):
@@ -43,30 +47,9 @@ def scan_batch(files, cwd, max_output=16 * 1024**2, timeout=60):
     command = [sys.executable, '-I', '-m', 'detect_secrets', 'scan', '--all-files', '--disable-filter',
                'detect_secrets.filters.allowlist.is_line_allowlisted', *files]
     env = {'PATH': os.defpath, 'PYTHONNOUSERSITE': '1', 'LC_ALL': 'C.UTF-8'}
+    if os.name == 'nt' and 'SystemRoot' in os.environ: env['SystemRoot'] = os.environ['SystemRoot']
     try:
-        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                   env=env, cwd=cwd, start_new_session=True)
-        try:
-            parts, size, deadline = [], 0, time.monotonic() + timeout
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0 or not selector.select(remaining): raise RuntimeError('Secret scanner timed out')
-                    chunk = os.read(process.stdout.fileno(), 65536)
-                    if not chunk: break
-                    size += len(chunk)
-                    if size > max_output: raise RuntimeError('Secret scanner report exceeds limit')
-                    parts.append(chunk)
-            if process.wait(timeout=max(0.1, deadline - time.monotonic())):
-                raise RuntimeError('Secret scanner failed; scan is incomplete')
-            return json.loads(b''.join(parts))
-        finally:
-            if process.poll() is None:
-                try: os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError: pass
-                process.wait()
-            process.stdout.close()
+        return json.loads(bounded_output(command, env=env, cwd=cwd, timeout=timeout, limit=max_output, label='Secret scanner'))
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError('Secret scanner could not complete') from exc
 
@@ -74,7 +57,7 @@ def scan_batch(files, cwd, max_output=16 * 1024**2, timeout=60):
 def resolve_source(value, profile_data=None, allow_profile_data=False, directory=False):
     if type(allow_profile_data) is not bool: raise ValueError('allow_profile_data must be boolean')
     original = Path(value).expanduser()
-    if original.is_symlink() or any(x.casefold() in PRIVATE - {'.hermes'} for x in original.parts):
+    if link_or_reparse(original) or any(x.casefold() in PRIVATE - {'.hermes'} for x in original.parts):
         raise ValueError('Private paths and symlink roots are unsupported')
     resolved = original.resolve(strict=True)
     data = Path(profile_data).resolve() if profile_data is not None else None
@@ -92,7 +75,7 @@ def resolve_source(value, profile_data=None, allow_profile_data=False, directory
 
 
 def staging_parent(source):
-    for candidate in (Path('/tmp'), Path('/dev/shm')):
+    for candidate in (Path(tempfile.gettempdir()), Path('/tmp'), Path('/dev/shm')):
         if candidate.is_dir() and os.access(candidate, os.W_OK) and not candidate.resolve().is_relative_to(source):
             return candidate
     raise ValueError('No private staging location exists outside the selected tree')
@@ -124,7 +107,7 @@ def _inspect_tree(source_dir, expose_generated_names=False, profile_data=None, a
                 omissions.append({'index': index, 'reason': 'non-UTF-8 path requires separate inspection'})
             if not expose_generated_names:
                 name_file = f'{index:08d}-name.txt'
-                (stage/name_file).write_text('path = ' + json.dumps(rel, ensure_ascii=non_utf8) + '\n', encoding='utf-8')
+                (stage/name_file).write_text('path = ' + json.dumps(rel, ensure_ascii=non_utf8) + '\n', encoding='utf-8', newline='\n')
                 mapping[name_file] = (index, 'name')
                 found = categories(rel)
                 if found: config.append({'index': index, 'component': 'name', 'line': 1, 'categories': found})
@@ -143,7 +126,7 @@ def _inspect_tree(source_dir, expose_generated_names=False, profile_data=None, a
             for name in list(dirs):
                 item = Path(directory)/name
                 index = add_entry(str(item.relative_to(p)))
-                if name.casefold() == '.git' or name.casefold() in PRIVATE or item.is_symlink():
+                if name.casefold() == '.git' or name.casefold() in PRIVATE or link_or_reparse(item):
                     omit(index, 'Git metadata, private configuration or symlink not inspected')
                     dirs.remove(name)
             for name in names:
@@ -151,9 +134,9 @@ def _inspect_tree(source_dir, expose_generated_names=False, profile_data=None, a
                 rel = str(item.relative_to(p))
                 index = add_entry(rel)
                 try:
-                    if not stat.S_ISREG(item.lstat().st_mode):
+                    if link_or_reparse(item) or not stat.S_ISREG(item.lstat().st_mode):
                         omit(index, 'symlink or special file requires separate inspection'); continue
-                    fd = os.open(item, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    fd = os.open(item, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
                     with os.fdopen(fd, 'rb') as stream:
                         before = os.fstat(stream.fileno())
                         if not stat.S_ISREG(before.st_mode):
@@ -176,7 +159,7 @@ def _inspect_tree(source_dir, expose_generated_names=False, profile_data=None, a
                 except UnicodeDecodeError:
                     omit(index, 'non-UTF-8 file requires separate inspection'); continue
                 content_file = f'{index:08d}-content.txt'
-                (stage/content_file).write_text(text, encoding='utf-8')
+                (stage/content_file).write_bytes(data)
                 mapping[content_file] = (index, 'content')
                 submitted += 1
                 for num, line in enumerate(text.splitlines(), 1):

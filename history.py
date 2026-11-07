@@ -3,11 +3,12 @@ import json
 import os
 from pathlib import Path
 import re
-import selectors
 import time
 import subprocess
 import tempfile
-from .core import _inspect_tree, resolve_source
+import shutil
+from .core import _inspect_tree, resolve_source, staging_parent
+from .bounded import output as bounded_output
 
 MAX_OBJECTS = 2000
 MAX_SINGLE = 8 * 1024**2
@@ -23,30 +24,12 @@ def git(repo, args, input_bytes=None, timeout=10):
             if input_bytes:
                 stdin_file.write(input_bytes)
                 stdin_file.seek(0)
-            process = subprocess.Popen(['git', '-C', str(repo), '--no-pager', *args], stdin=stdin_file,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=ENV)
-            try:
-                chunks, size = [], 0
-                deadline = time.monotonic() + timeout
-                with selectors.DefaultSelector() as selector:
-                    selector.register(process.stdout, selectors.EVENT_READ)
-                    while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0 or not selector.select(remaining):
-                            raise RuntimeError('Git inspection timed out')
-                        chunk = os.read(process.stdout.fileno(), 65536)
-                        if not chunk: break
-                        size += len(chunk)
-                        if size > 16 * 1024**2: raise RuntimeError('Git output exceeds inspection limit')
-                        chunks.append(chunk)
-                if process.wait(timeout=max(0.1, deadline - time.monotonic())):
-                    raise RuntimeError('Git inspection failed; history coverage is incomplete')
-                return b''.join(chunks)
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
-                process.stdout.close()
+            binary = shutil.which('git')
+            if not binary: raise RuntimeError('Git is unavailable; history coverage is incomplete')
+            env = dict(ENV)
+            if os.name == 'nt' and 'SystemRoot' in os.environ: env['SystemRoot'] = os.environ['SystemRoot']
+            return bounded_output([binary, '-C', str(repo), '--no-pager', *args], stdin=stdin_file,
+                                  env=env, timeout=timeout, limit=16 * 1024**2, label='Git inspection')
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError('Git inspection did not complete') from exc
 
@@ -144,7 +127,7 @@ def inspect_git(repo_path, allow_profile_data=False, *, _profile_data=None):
         records.append((parts[0], parts[1], int(parts[2])))
     if len(records) != len(object_ids) or {x[0] for x in records} != set(object_ids): raise RuntimeError('Git object enumeration was incomplete')
     omissions, types, total = [], {}, 0
-    with tempfile.TemporaryDirectory(dir='/tmp') as temp:
+    with tempfile.TemporaryDirectory(dir=staging_parent(repo)) as temp:
         root = Path(temp)
         names = []
         trees = {}
@@ -155,7 +138,7 @@ def inspect_git(repo_path, allow_profile_data=False, *, _profile_data=None):
             except UnicodeDecodeError:
                 omissions.append({'type': 'ref_names', 'index': index, 'reason': 'non-UTF-8 ref name requires separate inspection'})
         if names:
-            (root/'refnames.txt').write_text('\n'.join(names)+'\n', encoding='utf-8')
+            (root/'refnames.txt').write_text('\n'.join(names)+'\n', encoding='utf-8', newline='\n')
             types['refnames'] = 'ref_names'
         for identifier, kind, size in records:
             if size > MAX_SINGLE or total + size > MAX_TOTAL:

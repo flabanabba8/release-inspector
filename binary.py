@@ -6,7 +6,7 @@ import re
 import stat
 import tempfile
 import time
-from .core import _inspect_tree, resolve_source
+from .core import _inspect_tree, resolve_source, staging_parent
 
 MAX_BINARY = 32 * 1024 * 1024
 MAX_TEXT = 4 * 1024 * 1024
@@ -59,9 +59,9 @@ def inspect_binary(artifact_path, allow_profile_data=False, *, _profile_data=Non
         verify_unchanged()
         return {'sha256': fingerprint, 'strings_submitted': 0, 'strings_skipped': skipped,
                 'secret_indicators': [], 'configuration_indicators': [], 'notice': NOTICE}
-    with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
+    with tempfile.TemporaryDirectory(dir=staging_parent(path.parent)) as tmp:
         staged = Path(tmp)/'strings.txt'
-        staged.write_text('\n'.join(value for _, _, value in entries) + '\n', encoding='utf-8')
+        staged.write_text('\n'.join(value for _, _, value in entries) + '\n', encoding='utf-8', newline='\n')
         result = _inspect_tree(tmp, expose_generated_names=True, deadline=deadline)
     verify_unchanged()
     def public(item):

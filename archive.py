@@ -7,7 +7,7 @@ import stat
 import tempfile
 import time
 import zipfile
-from .core import _inspect_tree, resolve_source
+from .core import _inspect_tree, resolve_source, staging_parent
 
 MAX_ARCHIVE = 512 * 1024**2
 MAX_MEMBER = 8 * 1024**2
@@ -31,11 +31,11 @@ def inspect_archive(archive_path, allow_profile_data=False, *, _profile_data=Non
     deadline = time.monotonic() + 55
     omissions, unsafe_names, mapped = [], [], {}
     total, members = 0, 0
-    with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
+    with tempfile.TemporaryDirectory(dir=staging_parent(path.parent)) as tmp:
         staging = Path(tmp)
         def stage(identifier, kind, text):
             key = f'{len(mapped):08d}.txt'
-            (staging / key).write_text(text, encoding='utf-8')
+            (staging / key).write_bytes(text.encode('utf-8'))
             mapped[key] = {'member': identifier, 'component': kind}
         def visit(z, parent, depth):
             nonlocal total, members
